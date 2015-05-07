@@ -38,14 +38,29 @@ since this is a downloaded app, configuration words (e.g. __CONFIG or #pragma co
 /*
 local function prototyping
 */
-static void set_target(uint8_t ledn);
 
+static void set_target(uint8_t ledn);
+static void adjust_led(volatile uint8_t *current, struct bookkeep_struct *bookkeep);
+
+/*
+local variables
+*/
+
+/* array storing the current state of all LEDs */
 static struct ws_led_struct leds[LED_COUNT + 1];
 
+/* pointer used by ISR to incrementally read leds[] array */
 static uint8_t *ptr;
+
+/* array storing the target LED values (and calculated step values to get there) */
+static struct target_struct targets[LED_COUNT + 1];
 
 int main(void)
 {
+	uint8_t count;
+	struct target_struct *tpnt;
+	struct ws_led_struct *lpnt;
+
 	/* SPI (WS281x) init */
 	SSP1STAT = 0x40;
 	SSP1CON1 = 0x20;
@@ -84,6 +99,32 @@ int main(void)
 			ptr = (uint8_t *)&leds[1];
 			INTCONbits.GIE = 1;
 			SSP1BUF = 0x00;
+
+			/*
+			whilst the ISR takes care of talking to the WS281x, 
+			we can focus on the heavy task of fading the LEDs
+			*/
+			tpnt = &targets[1]; lpnt = &leds[1];
+			for (count = 0; count < LED_COUNT; count++)
+			{
+				if (0 == tpnt->fade_delay)
+				{
+					/* the fade has elapsed for this LED; write the final values */
+					*lpnt = tpnt->leds;
+				}
+				else
+				{
+					/* the fade isn't finished, but we are one step (10ms) closer */
+					tpnt->fade_delay--;
+
+					/* do that embedded voodoo that you do to make the fade happen */
+					adjust_led(&lpnt->g, &tpnt->bookkeep_g);
+					adjust_led(&lpnt->r, &tpnt->bookkeep_r);
+					adjust_led(&lpnt->b, &tpnt->bookkeep_b);
+				}
+
+				tpnt++; lpnt++;
+			}
 		}
 	}
 }
@@ -106,7 +147,7 @@ int16_t app_get_report_callback(uint8_t interface, uint8_t report_type,
 
 static void set_report_callback(bool transfer_ok, void *context)
 {
-	uint8_t ledn, index;
+	uint8_t ledn;
 
 	/* preemptively echo the contents of the SET_REPORT */
 	memcpy(get_report_buf, set_report_buf, EP_0_LEN);
@@ -119,9 +160,12 @@ static void set_report_callback(bool transfer_ok, void *context)
 	if (ledn > LED_COUNT)
 		ledn = 0;
 
-	leds[0].r = set_report_buf[2];
-	leds[0].g = set_report_buf[3];
-	leds[0].b = set_report_buf[4];
+	targets[0].leds.r = set_report_buf[2];
+	targets[0].leds.g = set_report_buf[3];
+	targets[0].leds.b = set_report_buf[4];
+
+	targets[0].fade_delay = (uint16_t)set_report_buf[5] << 8;
+	targets[0].fade_delay += set_report_buf[6];
 
 	switch (set_report_buf[1])
 	{
@@ -199,15 +243,104 @@ void interrupt isr()
 	}
 }
 
+static void calc_increment(volatile uint8_t *current, volatile uint8_t *target, struct bookkeep_struct *bookkeep)
+{
+	uint8_t updir;
+	uint16_t distance;
+
+	/* are we going UP or DOWN? */
+	updir = *target > *current;
+
+	/* figure the distance that we have to travel */
+	if (updir)
+		distance = (uint16_t)*target - (uint16_t)*current;
+	else
+		distance = (uint16_t)*current - (uint16_t)*target;
+
+	/*
+	power of 2 multiple by 256
+	the 0 to 255 distance value is now super-sized to 0 to 65280
+	*/
+	distance <<= 8;
+
+	bookkeep->increment = 0;
+	bookkeep->fraction = 0;
+
+	/*
+	writing tight embedded code means squeezing extra efficiency whenever possible
+
+	what we want is this:
+	bookkeep->increment = distance / targets[0].fade_delay;
+
+	but if we write it like this, we use less flash memory:
+	*/
+	while (distance > targets[0].fade_delay)
+	{
+		distance -= targets[0].fade_delay;
+		bookkeep->increment++;
+	}
+
+	/*
+	here is another embedded code trick:
+	by mangling the computed result slightly, we can store our computed flag for later use
+	blink0 has more than twice the fade calc precision of Blink(1), so we still come out ahead of the competition
+	*/
+	if (updir)
+		bookkeep->increment |= 1;
+	else
+		bookkeep->increment &= 0xFFFE;
+}
+
 static void set_target(uint8_t ledn)
 {
 	uint8_t index;
+	struct target_struct *tpnt = &targets[1];
+	struct ws_led_struct *lpnt = &leds[1];
 
+	/* sequence through all the LEDs in turn */
 	for (index = 1; index <= LED_COUNT; index++)
 	{
-		if (ledn && (ledn != index))
-			continue;
+		/* check if this LED is being written to */
+		if (!ledn || (ledn == index))
+		{
+			/* write the new target value */
+			*tpnt = targets[0];
 
-		leds[index] = leds[0];
+			/* calculate the fade values to aim for each of the target colors */
+			calc_increment(&lpnt->g, &targets[0].leds.g, &tpnt->bookkeep_g);
+			calc_increment(&lpnt->r, &targets[0].leds.r, &tpnt->bookkeep_r);
+			calc_increment(&lpnt->b, &targets[0].leds.b, &tpnt->bookkeep_b);
+		}
+
+		/* advance to the next target and led */
+		*tpnt++; *lpnt++;
 	}
+}
+
+static void adjust_led(volatile uint8_t *current, struct bookkeep_struct *bookkeep)
+{
+	uint8_t updir, msb;
+	uint16_t change;
+
+	/* retrieve the flag we hid earlier */
+	updir = bookkeep->increment & 1;
+
+	/*
+	showing off with writing tight embedded code again
+	Blink(1) wastes 16-bits PLUS 8-bits of RAM to store each current LED; blink0 does better
+
+	"fraction" is an 8-bit expression of the fraction after the decimal point of the current 8-bit LED value
+	the calculated "change" value is the step next LED value... expressed as a combination of whole and fraction
+	we add the whole to the current LED value and write the new fraction back to "fraction"
+	*/
+
+	change = (uint16_t)bookkeep->fraction + bookkeep->increment;
+
+	msb = change >> 8;
+	if (updir)
+		(*current)+=msb;
+	else
+		(*current)-=msb;
+
+	bookkeep->fraction = change & 0xFF;
 }

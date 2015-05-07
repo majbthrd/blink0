@@ -1,7 +1,14 @@
 /*
-    blink0: better-written and genuinely open-source firmware compatible with Blink(1)
+    blink0: genuinely open-source firmware that emulates a Blink(1)
 
     Copyright (C) 2015 Peter Lawrence
+
+    based on top of M-Stack USB driver stack by Alan Ott, Signal 11 Software
+
+    The author's intent in writing this code is to provide more readable 
+    firmware source code that can be used in tandem with a bootloader.
+    This enables the hobbyist/maker to experiment, innovate, and improve 
+    far more readily than may be possible with the Blink(1).
 
     Permission is hereby granted, free of charge, to any person obtaining a 
     copy of this software and associated documentation files (the "Software"), 
@@ -12,9 +19,6 @@
 
     The above copyright notice and this permission notice shall be included in 
     all copies or substantial portions of the Software.
-
-    The software is for use solely and exclusively on Microchip PIC 
-    Microcontroller products. 
 
     THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
     IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
