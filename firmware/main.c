@@ -245,7 +245,7 @@ void interrupt isr()
 
 static void calc_increment(volatile uint8_t *current, volatile uint8_t *target, struct bookkeep_struct *bookkeep)
 {
-	uint8_t updir;
+	uint8_t updir, lsb;
 	uint16_t distance;
 
 	/* are we going UP or DOWN? */
@@ -285,10 +285,9 @@ static void calc_increment(volatile uint8_t *current, volatile uint8_t *target, 
 	by mangling the computed result slightly, we can store our computed flag for later use
 	blink0 has more than twice the fade calc precision of Blink(1), so we still come out ahead of the competition
 	*/
-	if (updir)
-		bookkeep->increment |= 1;
-	else
-		bookkeep->increment &= 0xFFFE;
+	lsb = bookkeep->increment & 1;
+	if ( ((0 != updir) && (0 == lsb)) || ((0 == updir) && (0 != lsb)) )
+		bookkeep->increment--;
 }
 
 static void set_target(uint8_t ledn)
