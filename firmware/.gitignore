@@ -1,4 +1,3 @@
-syntax: glob
 *.d
 *.p1
 *.pre
