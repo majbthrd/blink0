@@ -157,13 +157,6 @@ static const ROMPTR struct { uint8_t bLength; uint8_t bDescriptorType; uint16_t 
 	{'T','h','i','n','g','M'}
 };
 
-static const ROMPTR struct { uint8_t bLength; uint8_t bDescriptorType; uint16_t chars[8]; } serial_string = 
-{
-	sizeof(serial_string),
-	DESC_STRING,
-	{'9','6','C','5','A','2','3','9'}
-};
-
 /* Get String function
  *
  * This function is called by the USB stack to get a pointer to a string
@@ -193,8 +186,9 @@ int16_t usb_application_get_string(uint8_t string_number, const void **ptr)
 	}
 	else if (3 == string_number)
 	{
-		*ptr = &serial_string;
-		return sizeof(serial_string);
+		/* leveraging the built-in SN provided by PIC16F1-USB-DFU-Bootloader */
+		*ptr = (void *)0x81EE;
+		return 18;
 	}
 
 	return -1;
